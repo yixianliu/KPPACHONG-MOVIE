@@ -1,0 +1,7 @@
+# 魔法国影视爬虫 运行依赖
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+pymysql>=1.1.0
+
+# 可选：若希望更快的 HTML 解析，可安装 lxml（解析器会自动回退到内置 html.parser）
+# lxml>=5.0.0
