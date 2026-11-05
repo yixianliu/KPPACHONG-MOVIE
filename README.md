@@ -13,7 +13,7 @@ mofaspider/
   db.py        # PyMySQL 连接 + upsert/insert/update 封装（表名为代码常量）
   http.py      # 防封 HTTP 客户端：UA 轮换 / 代理 / 限速抖动 / 指数退避重试
   parser.py    # 列表 / 详情 / 播放页解析（围绕已探明的真实 DOM）
-  images.py    # 图片下载落盘（类型 + 体积校验，返回相对公开路径）
+  images.py    # 图片下载落盘（按影片名拼音统一命名 + 类型/体积校验，返回重命名后的标准相对路径）
   models.py    # Film / PlaySource / Episode 数据类 + 规范化校验（按表约束截断）
   pipeline.py  # 去重 upsert 影片，并维护播放源/分集/属性/主演维度（单事务）
   state.py     # 增量状态（按 source_url + 更新日期幂等，支持时间窗）
@@ -35,6 +35,24 @@ USERNAME=root
 PASSWORD=root
 HOSTPORT=3306
 CHARSET=utf8mb4
+
+[SPIDER]
+# 封面图片存储：按影片名拼音命名，落盘到 FilmCms 静态资源目录
+IMAGE_DOWNLOAD=true
+IMAGE_BASE_DIR=D:\phpstudy_pro\WWW\FilmCms\public\static\images\film-cover
+IMAGE_PUBLIC_PREFIX=/static/images/film-cover
+IMAGE_MAX_SIZE=10
+IMAGE_ALLOWED_TYPES=image/jpeg,image/png,image/webp,image/gif
+# IMAGE_FALLBACK_TO_URL=false  # 非规范兜底（调试用，默认关：失败/禁用时封面字段置空，绝不写原图 URL）
+
+# 反爬 / 网络策略
+SPIDER_PROXY=                      # 单代理（可选），如 http://user:pass@1.2.3.4:8080
+SPIDER_PROXY_POOL=                 # 代理池（可选），逗号分隔，逐请求随机轮换
+VERIFY_SSL=false                   # 是否校验 TLS 证书（源站自签/证书链不完整时关，默认关）
+ADAPTIVE_INTERVAL=true             # 依据 429/5xx 自适应放宽/收敛限速（默认开）
+SPIDER_REQUEST_INTERVAL=1.0        # 基础请求间隔（秒），自适应会在其基础上乘倍率
+SPIDER_RETRY_TIMES=3               # 重试次数（含对 429/5xx/网络异常的指数退避，并尊重 Retry-After）
+SPIDER_RETRY_BACKOFF=2.0
 
 [MOFAGUO]
 BASE_URL=https://www.mofaguo.cn
@@ -91,11 +109,26 @@ python run.py --no-extract
 
 - **请求防封**：随机 UA 轮换、可选 HTTP/HTTPS 代理、全局限速 + 随机抖动（降低规律性）。
 - **异常重试**：对网络异常与 429/5xx 状态码做指数退避重试。
-- **数据去重**：以详情页地址 `source_url` 为外部唯一键做 upsert；增量模式按更新日期幂等跳过。
+- **数据去重（原子）**：以详情页地址 `source_url` 为外部唯一键，**先查后写**——
+  存在则按最新爬取数据**全字段覆盖更新**，不存在则**标准新增**；查重 `SELECT` 使用
+  `FOR UPDATE` 在事务内加锁，保证“查重→写库”的原子性，避免并发双插/覆盖错乱
+  （单进程内另有 `_db_lock` 串行化；多进程建议见下方唯一索引说明）。
+- **图片命名与存储**：封面按**影片名拼音**统一命名
+  （`<拼音>_<site_id>.<ext>`，拼音失败回退哈希，site_id 保证全局唯一、避免重名冲突），
+  落盘到 `IMAGE_BASE_DIR`（默认 `FilmCms/public/static/images/film-cover`），
+  数据库图片字段**只写重命名后的标准相对路径**，绝不写原图 URL 或本地临时绝对路径；
+  Windows 路径兼容、特殊字符剔除、类型/体积校验、完整日志一应俱全。
 - **增量更新**：`--since-hours` 时间窗 + 状态文件，中断可续跑，避免重复抓取。
 - **清洗校验**：按各表 `varchar` 长度截断、`enum` 枚举校正、`score/year` 范围校正、主演/标签去重，
   并自动生成 SEO 字段。
 - **完整日志与异常捕获**：单影片失败仅记日志并计数，不中断整体；结束输出统计。
+
+> **并发去重增强（可选）**：`FOR UPDATE` 在 `ba_film.source_url` 无唯一索引时会退化为表级间隙锁
+> （仍安全，仅并发度下降）。若需行级锁以支撑多进程/高并发写入，建议对 `source_url` 建立唯一索引：
+> ```sql
+> -- 确认无重复 source_url 后执行（重复需先清洗）
+> ALTER TABLE `ba_film` ADD UNIQUE KEY `uk_source_url` (`source_url`);
+> ```
 
 ## 6. 已知约束 / 说明
 
@@ -104,3 +137,27 @@ python run.py --no-extract
 - 中文片名首字母按库规范归为 `#`（苹果CMS 既有行为）。
 - `ba_film_star.film_count` 为冗余统计，本爬虫仅保证主演维度行存在，不实时重算计数。
 - 列表分页规律为 `/gangju/news/{type}-{page}.html`，已在 `.env` 模板中参数化。
+
+## 7. 反爬适配与测试
+
+### 7.1 反爬策略（已内置）
+- **UA 轮换**：内置较新 UA 池（Chrome/Edge/Firefox/Safari/移动端），逐请求随机切换。
+- **代理池**：`SPIDER_PROXY_POOL`（逗号分隔）与 `SPIDER_PROXY` 合并去重，逐请求随机选路；
+  多代理可分散 IP 风险，必要时配合代理健康检查（见下方维护建议）。
+- **自适应限速**：`ADAPTIVE_INTERVAL=true` 时，遇到 429/5xx 自动放宽请求间隔（最高 8 倍），
+  成功后缓慢收敛；既降低被封概率，也避免长期过慢。
+- **退避重试**：对 429/500/502/503/504 与网络异常做指数退避重试，并**尊重服务端 `Retry-After`**（秒数或 HTTP 日期）。
+- **挑战检测**：识别 403 / 验证码 / 人机校验页面，触发可插拔 `on_challenge` 回调后放弃该请求，
+  避免对拦截页空转刷请求（回调为扩展点，可接打码平台/告警）。
+
+### 7.2 测试
+- 测试目录 `test/`，基于 `pytest` + `pytest-cov`：
+  `images`（拼音命名/唯一性/特殊字符）、`models`（截断/枚举/SEO）、`pipeline`（查重→新增/覆盖更新，
+  含 `FOR UPDATE` 与 `create_time` 保留）、`http`（Retry-After/代理池/挑战检测/成功失败路径）、`config`（.env 加载）。
+- 运行：
+  ```bash
+  pip install -r requirements-dev.txt
+  python -m pytest test -q            # 全量
+  python -m pytest test --cov=mofaspider  # 含覆盖率
+  ```
+- 解析器自动优选 `lxml`（已安装于本机），不可用时回退内置 `html.parser`，解析更快更稳。

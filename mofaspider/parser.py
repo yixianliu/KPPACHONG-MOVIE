@@ -18,6 +18,13 @@ from bs4 import BeautifulSoup
 
 from .models import Episode, Film, FilmSummary, PlaySource
 
+# 解析器优选：lxml 更快且容错更强；不可用时回退内置 html.parser
+try:  # pragma: no cover - 依赖环境相关
+    import lxml  # noqa: F401
+    _PARSER = "lxml"
+except Exception:  # pragma: no cover
+    _PARSER = "html.parser"
+
 _SITE_ID_RE = re.compile(r"/dt/(\d+)\.html")
 
 
@@ -31,7 +38,7 @@ def _abs(url: str, base: str) -> str:
 
 def parse_listing(html: str, base_url: str) -> List[FilmSummary]:
     """从列表页提取影片摘要列表。"""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, _PARSER)
     out: List[FilmSummary] = []
     seen = set()
     # 主网格：带 lazyload 的缩略图锚点
@@ -164,7 +171,7 @@ def _parse_play(soup: BeautifulSoup, base_url: str, site_id: str):
 
 def parse_detail(html: str, base_url: str, site_id: str,
                  default_type: str = "movie") -> Optional[Film]:
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, _PARSER)
 
     h1 = soup.find("h1", class_="title")
     if not h1:

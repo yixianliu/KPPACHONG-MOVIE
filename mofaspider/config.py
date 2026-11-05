@@ -94,6 +94,9 @@ class SpiderConfig:
     request_interval: float
     user_agent: str
     proxy: str
+    proxy_pool: List[str]          # 代理池（与 proxy 合并去重，逐请求轮换）
+    verify_ssl: bool               # 是否校验 TLS 证书（源站自签时可关，默认关）
+    adaptive_interval: bool        # 依据 429/5xx 自适应调整限速（默认开）
     # image
     image_download: bool
     image_base_dir: str
@@ -102,6 +105,7 @@ class SpiderConfig:
     image_concurrency: int
     image_max_size_mb: int
     image_allowed_types: List[str]
+    image_fallback_to_url: bool   # 非规范兜底：仅调试用，默认 False（绝不写原图 URL）
     # log/state
     log_level: str
     log_dir: str
@@ -176,14 +180,19 @@ class Config:
                                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
             proxy=sp_s.get("SPIDER_PROXY", ""),
+            proxy_pool=sp_s.get_list("SPIDER_PROXY_POOL"),
+            verify_ssl=sp_s.get_bool("VERIFY_SSL", False),
+            adaptive_interval=sp_s.get_bool("ADAPTIVE_INTERVAL", True),
             image_download=sp_s.get_bool("IMAGE_DOWNLOAD", True),
-            image_base_dir=sp_s.get("IMAGE_BASE_DIR", "storage/film_images"),
-            image_public_prefix=sp_s.get("IMAGE_PUBLIC_PREFIX", "/uploads/film"),
+            image_base_dir=sp_s.get("IMAGE_BASE_DIR",
+                                    r"D:\phpstudy_pro\WWW\FilmCms\public\static\images\film-cover"),
+            image_public_prefix=sp_s.get("IMAGE_PUBLIC_PREFIX", "/static/images/film-cover"),
             image_timeout=sp_s.get_int("IMAGE_TIMEOUT", 30),
             image_concurrency=sp_s.get_int("IMAGE_CONCURRENCY", 4),
             image_max_size_mb=sp_s.get_int("IMAGE_MAX_SIZE", 10),
             image_allowed_types=sp_s.get_list("IMAGE_ALLOWED_TYPES",
                                               "image/jpeg,image/png,image/webp,image/gif"),
+            image_fallback_to_url=sp_s.get_bool("IMAGE_FALLBACK_TO_URL", False),
             log_level=sp_s.get("LOG_LEVEL", "INFO"),
             log_dir=sp_s.get("LOG_DIR", "runtime/spider/log"),
             state_dir=sp_s.get("STATE_DIR", "runtime/spider/state"),

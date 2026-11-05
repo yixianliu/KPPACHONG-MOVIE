@@ -13,7 +13,25 @@ _DATE_FMT = "%Y-%m-%d %H:%M:%S"
 def get_logger(name: str = "mofa_spider", *, level: str = "INFO",
                log_dir: str | None = None, root: Path | None = None) -> logging.Logger:
     logger = logging.getLogger(name)
+    # 模块级 get_logger()（无 log_dir）可能先初始化并置位标记，
+    # 此处若再传入 log_dir 且尚未挂文件 handler，应补挂而非短路返回，
+    # 否则 run.py 的日志文件配置会被静默忽略，导致日志从不落盘。
     if getattr(logger, "_mofa_inited", False):
+        if log_dir and not getattr(logger, "_mofa_has_file", False):
+            lvl = logger.level
+            formatter = logging.Formatter(_DEFAULT_FMT, _DATE_FMT)
+            base = root if root else Path.cwd()
+            fpath = (base / log_dir).resolve()
+            fpath.mkdir(parents=True, exist_ok=True)
+            log_file = fpath / f"{name}.log"
+            fh = RotatingFileHandler(
+                str(log_file), maxBytes=10 * 1024 * 1024, backupCount=5,
+                encoding="utf-8",
+            )
+            fh.setLevel(lvl)
+            fh.setFormatter(formatter)
+            logger.addHandler(fh)
+            logger._mofa_has_file = True  # type: ignore
         return logger
 
     lvl = getattr(logging, level.upper(), logging.INFO)
@@ -39,6 +57,7 @@ def get_logger(name: str = "mofa_spider", *, level: str = "INFO",
         fh.setLevel(lvl)
         fh.setFormatter(formatter)
         logger.addHandler(fh)
+        logger._mofa_has_file = True  # type: ignore
 
     logger._mofa_inited = True  # type: ignore
     logger.propagate = False
